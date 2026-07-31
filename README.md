@@ -12,7 +12,10 @@ A Claude Code skill that replaces subscription media-generation aggregators (Hig
 
 Media aggregators don't make AI models — they wrap other companies' APIs (Nano Banana, Kling, Veo, GPT-Image…) behind one account and charge a subscription. Pay-as-you-go aggregators (kie.ai, fal.ai, WaveSpeed) do the same wrapping but charge per generation. An AI agent that can read docs and write code can be the front end itself. This skill is the instruction manual for that.
 
-Credit where due: the concept comes from [Jay (Robo Nuggets)'s video "I replaced Higgsfield with one Claude skill"](https://www.youtube.com/watch?v=9C4TRbucmhQ). This is an independent implementation of the idea he demonstrates. See [`docs/jay-generate-skill-interpretation.html`](docs/jay-generate-skill-interpretation.html) for an analysis of his design, and [`docs/genmedia-development-journey.html`](docs/genmedia-development-journey.html) for the full build story — including why this is a skill and not an MCP server, and an honest list of what you give up vs. a polished subscription product.
+Credit where due: the concept comes from [Jay (Robo Nuggets)'s video "I replaced Higgsfield with one Claude skill"](https://www.youtube.com/watch?v=9C4TRbucmhQ). This is an independent implementation of the idea he demonstrates. Two write-ups (live pages):
+
+- **[The development journey](https://az9713.github.io/genmedia-skill/genmedia-development-journey.html)** — the full build story: model routing demystified, why this is a skill and not an MCP server, real measured costs, and an honest list of what you give up vs. a polished subscription product.
+- **[Interpreting Jay's /generate design](https://az9713.github.io/genmedia-skill/jay-generate-skill-interpretation.html)** — analysis of the original skill shown in his video.
 
 ## What's in the box
 
