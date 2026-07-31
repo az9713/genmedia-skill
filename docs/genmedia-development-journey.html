@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building /genmedia — How We Replaced a $79/month Aggregator with Two Markdown Files</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    max-width: 800px; margin: 2rem auto; padding: 0 1.25rem 4rem;
+    font-family: Georgia, 'Times New Roman', serif; line-height: 1.65;
+    color: #222; background: #fdfdfb;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #ddd; background: #1a1a1c; }
+    .box { background: #26262a !important; border-color: #444 !important; }
+    code, pre { background: #2e2e33 !important; }
+    table th, table td { border-color: #444 !important; }
+  }
+  h1 { font-size: 1.75rem; line-height: 1.25; }
+  h2 { font-size: 1.3rem; margin-top: 2.4rem; border-bottom: 1px solid #ccc4; padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin-top: 1.6rem; }
+  code { background: #eee; padding: .1em .35em; border-radius: 4px; font-size: .88em; font-family: ui-monospace, Consolas, monospace; }
+  pre { background: #eee; padding: .8rem 1rem; border-radius: 8px; overflow-x: auto; font-size: .85rem; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  .box { background: #f4f2ec; border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .93rem; }
+  th, td { border: 1px solid #ccc; padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  .muted { color: #777; font-size: .9rem; }
+  .toc { font-size: .95rem; }
+  .toc a { text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Building <code>/genmedia</code></h1>
+<p class="muted">How one Claude Code skill replaced a $79/month media-generation subscription — the full development journey, what it teaches about model aggregators, and an honest accounting of what we gave up. July 31, 2026.</p>
+
+<div class="box toc">
+<strong>Contents</strong><br>
+1. Where it started: Jay's video<br>
+2. The core insight: aggregators are wrappers<br>
+3. What we built, step by step<br>
+4. How model routing actually works<br>
+5. The doubt that shaped the design: "you can't know every API"<br>
+6. Live tests and real measured costs<br>
+7. The gallery: why media generation needs eyes<br>
+8. The MCP question: why Higgsfield has one and we don't need one<br>
+9. What we lost: an honest ledger<br>
+10. What this demystifies
+</div>
+
+<h2 id="s1">1. Where it started: Jay's video</h2>
+<p>The trigger was a YouTube video by Jay (Robo Nuggets), "I replaced Higgsfield with one Claude skill." In it, he demonstrates a Claude Code skill called <code>/generate</code>: he pastes a plain-English brief — product ads for an energy drink, a $3 budget, a spread of different image models — and Claude does everything: picks models, picks the cheapest provider, crafts prompts, calls the APIs, saves the images locally with their prompts logged, and displays them in a home-built gallery. In a follow-up prompt he takes one image he likes and, in the same session, has Claude animate it into a video and build an entire website around it.</p>
+<p>The economic backdrop: Higgsfield, a popular AI media platform, charges roughly $49–79/month for credit-based access to models it does not own. It had also just angered users with a terms-of-service update touching who can use your generated content, and it deletes your assets shortly after you cancel. Jay's pitch was that the entire service can be recreated as a personal Claude skill on pay-as-you-go pricing, where a month of light use costs cents instead of $79, and every asset lives on your own disk forever.</p>
+
+<h2 id="s2">2. The core insight: aggregators are wrappers</h2>
+<p>The load-bearing idea, worth stating bluntly: <strong>Higgsfield does not make the AI models.</strong> Nano Banana is Google's. Kling is Kuaishou's. Veo is Google's. GPT-Image is OpenAI's. Higgsfield read those companies' API documentation, wrote connection code, put a nice interface on top, and charges a subscription for the bundle. That is a legitimate business — aggregation has real value — but it is not magic, and nothing about it is exclusive.</p>
+<p>One tier down sit the <em>pay-as-you-go aggregators</em>: fal.ai, kie.ai, WaveSpeed. They do the same wrapping but charge per generation instead of per month — one account, one API key, hundreds of models. And since they expose plain HTTP APIs, anything that can write code can use them. Claude Code can write code. Therefore Claude Code can <em>be</em> the aggregator's front end, with a markdown file as its instruction manual. That markdown file is the skill.</p>
+
+<h2 id="s3">3. What we built, step by step</h2>
+<p>The finished product is deliberately small: <strong>two markdown files and one dashboard script</strong>, all in <code>~/.claude/skills/genmedia/</code>.</p>
+<table>
+<tr><th>File</th><th>Role</th></tr>
+<tr><td><code>SKILL.md</code></td><td>The instruction manual Claude loads when you type <code>/genmedia</code> (or just ask for media in plain words). Contains the hard rules, the routing policy, the two provider calling patterns, and the output/logging conventions.</td></tr>
+<tr><td><code>models.md</code></td><td>A growing cache of verified "model recipes" — exact model IDs, input fields, and <em>measured</em> costs. Starts empty; every successful first use of a new model appends to it.</td></tr>
+<tr><td><code>gallery.js</code></td><td>A ~100-line zero-dependency Node server. Serves a dark masonry-grid gallery over the output folder at <code>localhost:7777</code> — click any item to see its prompt, model, and cost, with copy buttons.</td></tr>
+</table>
+<p>The development sequence, compressed:</p>
+<ol>
+<li><strong>Wrote SKILL.md</strong> around four design decisions borrowed from Jay: cheapest-provider routing with fallback; hard budget rules; one flat output folder with a "sidecar" JSON next to every file recording exactly how it was made; and a local gallery, because visual work cannot be judged in a terminal.</li>
+<li><strong>Tested the kie.ai path</strong>: one image with Nano Banana 2 Lite. Worked first try; measured cost 4 credits (~2¢), about 12 seconds.</li>
+<li><strong>Tested the fal.ai path</strong>: one image with Nano Banana. Worked; $0.039, about 6 seconds.</li>
+<li><strong>Tested video</strong>: one 5-second Kling 2.6 clip via kie.ai. The skill's video rule kicked in — cost quoted first ($0.28), generation only after an explicit "go." Actual cost matched the quote: 55 credits ≈ $0.28, about 2 minutes.</li>
+<li><strong>Built the gallery</strong> and pointed it at the output folder.</li>
+<li><strong>Hardened the loop</strong>: after each test, everything newly learned (working endpoints, real prices, quirks) was written back into the skill files. The skill literally got smarter with each run — more on this in section 5.</li>
+</ol>
+
+<h2 id="s4">4. How model routing actually works</h2>
+<p>"Model routing" sounds sophisticated. Here is the entire mechanism, demystified:</p>
+<ol>
+<li><strong>Pick the model.</strong> Defaults do most of the work: images → Nano Banana (cheapest capable tier), video → Kling. Anything else (Seedance, Flux, GPT-Image…) only when the user names it. This is a two-line lookup table, not machine learning.</li>
+<li><strong>Pick the provider, cheapest first.</strong> Our order: kie.ai, then fal.ai. If the first provider lacks the model or errors twice, fall through to the next. That's the whole "router."</li>
+<li><strong>Get the model's input schema.</strong> Both providers use one uniform job envelope for <em>every</em> model they host — only the model ID string and the input JSON differ per model:
+<pre><code># kie.ai — same two endpoints for all models
+POST https://api.kie.ai/api/v1/jobs/createTask   { "model": "&lt;id&gt;", "input": {...} }
+GET  https://api.kie.ai/api/v1/jobs/recordInfo?taskId=...   (poll until success/fail)
+
+# fal.ai — same URL pattern for all models
+POST https://queue.fal.run/&lt;model-id&gt;            {...input...}
+GET  https://queue.fal.run/&lt;model-id&gt;/requests/&lt;id&gt;/status   (poll)</code></pre>
+So the "500 models" problem collapses to two calling patterns plus a per-model input schema — and the schema is fetched from the provider's own docs at the moment it's needed.</li>
+<li><strong>Generate, poll, download.</strong> Claude writes a small throwaway Node script per job, submits, polls every ~3 seconds, downloads the result immediately (provider URLs expire in ~24 hours), and writes the sidecar JSON.</li>
+</ol>
+<p>That is everything Higgsfield's routing does, minus the web interface. When someone says a product "intelligently routes across models," this is usually what's behind the curtain: a preference list, a fallback chain, and a schema lookup.</p>
+
+<h2 id="s5">5. The doubt that shaped the design: "you can't know every API"</h2>
+<p>Mid-build, a fair objection was raised: a short generic skill can't possibly contain the API details for hundreds of models across two providers. Correct — and the resolution is the most interesting part of the design.</p>
+<p><strong>The skill does not contain API knowledge. It contains a <em>procedure for acquiring</em> API knowledge.</strong> When Claude meets a model it hasn't used before, the skill tells it where the ground truth lives:</p>
+<ul>
+<li>kie.ai publishes a machine-readable docs index at <code>docs.kie.ai/llms.txt</code>, with a markdown page per model listing the exact model ID and input fields. (The main <code>kie.ai</code> site blocks bots with 403s — we learned that the hard way and wrote it into the skill.)</li>
+<li>fal.ai's model pages are bot-blocked too, but we found a better door: <code>https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=&lt;model-id&gt;</code> returns the complete input/output schema for <em>any</em> of fal's models as structured OpenAPI JSON.</li>
+</ul>
+<p>Fetch the schema, use it, then <em>cache what worked</em> — the verified recipe and the measured real cost get appended to <code>models.md</code>, so the next session skips the fetch. If a cached recipe ever starts failing (providers do rename things), the rule is: re-fetch the docs, don't retry blindly. The cache self-heals.</p>
+<p>This is exactly what Jay did manually — he copy-pasted API snippets from provider docs into his skill. Ours does the copy-pasting lazily, on first use, by itself. Knowledge that is <em>looked up</em> cannot go stale the way knowledge that is <em>compiled in</em> does. Hold onto that distinction; it's the crux of the MCP discussion below.</p>
+
+<h2 id="s6">6. Live tests and real measured costs</h2>
+<p>Nothing above is theoretical — every path was exercised with real money and the results verified on disk:</p>
+<table>
+<tr><th>Test</th><th>Model / Provider</th><th>Measured cost</th><th>Time</th></tr>
+<tr><td>Image (kie path)</td><td>nano-banana-2-lite / kie.ai</td><td>4 credits ≈ $0.02</td><td>~12 s</td></tr>
+<tr><td>Image (fal path)</td><td>fal-ai/nano-banana / fal.ai</td><td>$0.039</td><td>~6 s</td></tr>
+<tr><td>Video, 5 s, 16:9, no audio</td><td>kling-2.6/text-to-video / kie.ai</td><td>55 credits ≈ $0.28 (quote said $0.28 — exact)</td><td>~2 min</td></tr>
+</table>
+<p>Useful reference points that fell out of the tests: kie.ai credits convert at roughly 200 credits per dollar; adding audio to a Kling clip doubles its price; a 10-second clip also roughly doubles it; and if your credit balance is short, the API returns a 402 with <em>zero charge</em>, which makes falling back to the other provider safe. Cost quoting isn't guesswork either — the skill checks the credit balance before and after every batch, so each generation's true cost is measured, logged in the sidecar, and used to enforce the budget ceiling.</p>
+<p>Speaking of which, the skill's hard rules — the guardrails that make it safe to hand a credit card to an eager AI: a user-stated budget is a hard ceiling checked before every API call; <strong>video always gets a cost quote and waits for an explicit "go"</strong>; never generate more items than asked; never print API keys; and never trust a clean API exit — verify the file actually exists on disk with non-zero size.</p>
+
+<h2 id="s7">7. The gallery: why media generation needs eyes</h2>
+<p>A terminal can tell you a generation succeeded; it cannot tell you whether the image is any good. Higgsfield's masonry-grid gallery is a genuinely important part of its product, so the skill has its own: a single Node script with zero dependencies that serves the output folder as a dark masonry grid. Videos play on hover. Clicking anything opens it large with a side panel showing the prompt, model, provider, cost, and date — read from the sidecar JSON — plus one-click "copy prompt" and "copy path" buttons. That last button is the bridge to the next task: copy a path, paste it into a "now build a website around this image" prompt, exactly as Jay demonstrated.</p>
+<p>The sidecar convention is doing quiet heavy lifting here. Every media file gets a same-named <code>.json</code> beside it recording prompt, model, provider, parameters, and measured cost. Provenance is never lost: months later, "how did I make this?" is answered by a file sitting right next to the image. Higgsfield offers this as a feature; here it's just... files.</p>
+<p>Media lands in a <code>generations/</code> subfolder of whatever project you're working in — media stays with its project but out of your project files. (We tried "dump straight into the working folder" first; it mixed generated media into project files, and was reversed in one line. Cheap decisions are reversible decisions.)</p>
+
+<h2 id="s8">8. The MCP question: why Higgsfield has one and we don't need one</h2>
+<p>Higgsfield ships an MCP server (Model Context Protocol — the standard that lets AI assistants call external tools), and it's genuinely useful. So shouldn't <code>/genmedia</code> be an MCP server too? We decided no, and the reasoning demystifies both.</p>
+<h3>Why Higgsfield's MCP earns its keep</h3>
+<p>MCP exists so that clients that <strong>cannot run code</strong> — the claude.ai website, mobile apps, other AI products — can still invoke external capabilities through typed, declared tools. Higgsfield's internals are closed; you cannot see or reimplement them. An MCP server is their <em>only</em> programmable surface, so of course they ship one. For them, MCP is the door into a locked building.</p>
+<h3>Why we don't need one</h3>
+<p>Our building has no walls. The skill runs inside Claude Code, which can already write scripts, fetch documentation, and call any HTTP API directly. An MCP layer between Claude and the providers would add a server process, a config entry, a maintenance surface — and zero new capability.</p>
+<p>There's a deeper, structural reason. An MCP tool is a <em>fixed contract</em>: its name and input schema are declared in server code before any request happens. If Kling adds a new parameter tomorrow, the MCP server doesn't have it until a human edits the server and redeploys. The server can't read documentation; it can only execute code written in the past. Staleness is built into the shape of the thing. The skill inverts this: it ships no schemas, only the <em>method</em> for fetching today's schema at generation time. Compressed: <strong>an MCP server ships answers; the skill ships the method for finding answers. Answers rot; methods don't.</strong></p>
+<p>(Honest caveat: you <em>could</em> build a non-frozen MCP server with one generic <code>generate(model, input)</code> tool that fetches schemas itself — that's roughly what Higgsfield's does. But then you've reimplemented the skill's method inside a server you now maintain. Same behavior, more machinery.)</p>
+<p>The decision reverses cheaply: if <code>/genmedia</code> is ever needed from claude.ai on a phone, or handed to someone who doesn't use Claude Code, the same <code>models.md</code> recipes can be wrapped in a thin MCP server in about an hour. Until that user exists, building it is speculation.</p>
+
+<h2 id="s9">9. What we lost: an honest ledger</h2>
+<p>A fair comparison names its costs. Switching from Higgsfield to a home-grown skill over kie.ai and fal.ai gives up real things:</p>
+<table>
+<tr><th>What Higgsfield has</th><th>What we have instead</th><th>How much it matters</th></tr>
+<tr><td><strong>Proprietary models and effects.</strong> Higgsfield built its own models (e.g. the "Soul" image model) and signature camera-motion / VFX presets that exist nowhere else.</td><td>Only what kie/fal aggregate — which is the entire open market, but not Higgsfield's in-house work.</td><td>Real loss if their house style is what you're after; irrelevant if you mainly want Nano Banana, Kling, Veo, GPT-Image, Flux, Seedance — which are all on the aggregators.</td></tr>
+<tr><td><strong>Polished visual workflows.</strong> Click-to-inpaint canvases, motion brushes, character-consistency pipelines, style pickers — refined UI for iterative visual editing.</td><td>Prompts, file paths, and a read-only gallery. Iteration happens by conversation, not by dragging.</td><td>The biggest genuine gap. Conversational editing is powerful but slower for fine spatial control ("fix just this corner").</td></tr>
+<tr><td><strong>Latest-model onboarding done for you.</strong> New model drops; Higgsfield's team wires it up, prices it, and puts a button on it — often day one.</td><td>Aggregators are also fast (fal frequently has day-one access), but <em>we</em> integrate: fetch schema, verify, cache. Ten minutes of skill-work per new model.</td><td>Minor. The claim "Higgsfield has more and newer models" is mostly false versus fal/kie's ~500-model catalogs — except for their proprietary ones (row 1).</td></tr>
+<tr><td><strong>Predictable flat bill + "unlimited" plans.</strong> Heavy users generating hundreds of videos monthly can come out ahead on a subscription buffet.</td><td>Strict pay-per-use. Our measured rate: ~$0.28 per 5s video, ~2–4¢ per image.</td><td>Depends entirely on volume. At $79/month ≈ 280 Kling clips — below that, PAYG wins. Light users win enormously.</td></tr>
+<tr><td><strong>One company to blame.</strong> Support, uptime, refunds, content moderation handled for you.</td><td>We handle reliability ourselves: kie is cheapest but occasionally strains under demand (hence the fal fallback); errors are ours to debug.</td><td>Small in practice — the fallback chain already absorbs the common failure. But there is no support ticket to file.</td></tr>
+<tr><td><strong>Hosted asset library.</strong> Cloud storage, sharing links, team access from any device.</td><td>Local disk plus a localhost gallery. Sharing means sending a file; multi-device means syncing a folder.</td><td>Cuts both ways — local storage is precisely why we own our assets and their prompts forever, with no 30-day deletion window and no training-use clause.</td></tr>
+</table>
+<p>Also worth naming: the aggregators sit at the shady-margins end of some gray zones — kie.ai's rock-bottom GPT-Image pricing is widely suspected to ride on subsidized consumer subscriptions, which could break someday. Diversification across two providers is the hedge.</p>
+
+<h2 id="s10">10. What this demystifies</h2>
+<p>Strip away the branding and the whole domain looks like this:</p>
+<ol>
+<li><strong>Model makers</strong> (Google, OpenAI, Kuaishou, ByteDance…) train the actual models and sell API access.</li>
+<li><strong>Aggregators</strong> (fal, kie, WaveSpeed — and Higgsfield) wrap many such APIs behind one account. Their engineering contribution is real but thin: uniform job envelopes, billing, storage, UI. The subscription ones add polish and house models; the PAYG ones add price efficiency.</li>
+<li><strong>Routing</strong> is a preference list plus a fallback chain plus a schema lookup. Nothing more mystical is happening at any layer of this stack.</li>
+<li><strong>An AI agent that can read docs and write code</strong> can stand in for an aggregator's entire front end. The instruction manual for doing so fits in two markdown files, and — the part worth internalizing — it improves itself, because every run's discoveries are written back into the files that guide the next run.</li>
+</ol>
+<p>The $79/month question, answered: you're paying for interface polish, proprietary extras, and not having to think. All three are legitimate purchases. But the generation capability itself — the thing that feels like the product — was never theirs, and now it's yours: a skill that routes to the cheapest source, quotes before it spends, logs everything it makes, and shows its work in a gallery, for the price of the electrons involved.</p>
+
+<p class="muted" style="margin-top:3rem">Written July 31, 2026, at the end of the build session. Total spend across all verification tests: roughly $0.37 plus 59 kie credits (~$0.30) — about 67 cents to replace a subscription.</p>
+
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What Jay's /generate Skill Actually Is — My Interpretation</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    max-width: 780px; margin: 2rem auto; padding: 0 1.25rem 4rem;
+    font-family: Georgia, 'Times New Roman', serif; line-height: 1.65;
+    color: #222; background: #fdfdfb;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #ddd; background: #1a1a1c; }
+    .box { background: #26262a !important; border-color: #444 !important; }
+    code { background: #333 !important; }
+    table th, table td { border-color: #444 !important; }
+  }
+  h1 { font-size: 1.7rem; line-height: 1.25; }
+  h2 { font-size: 1.25rem; margin-top: 2.2rem; border-bottom: 1px solid #ccc4; padding-bottom: .3rem; }
+  code { background: #eee; padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+  .box { background: #f4f2ec; border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .95rem; }
+  th, td { border: 1px solid #ccc; padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  .flow { font-family: ui-monospace, Consolas, monospace; font-size: .9rem; overflow-x: auto; white-space: pre; }
+  .muted { color: #777; font-size: .9rem; }
+</style>
+</head>
+<body>
+
+<h1>What Jay's <code>/generate</code> Skill Actually Is</h1>
+<p class="muted">My interpretation, written before we build our own version. Source: Jay's video "I replaced Higgsfield with one Claude skill" (youtube.com/watch?v=9C4TRbucmhQ) and my notes.</p>
+
+<h2>The one-sentence version</h2>
+<p><strong><code>/generate</code> is a Claude Code skill — a written instruction document — that turns Claude into Jay's personal Higgsfield: it takes a plain-English request, picks the right AI model and the cheapest provider that serves it, writes and runs a small script to call that provider's API, saves the result to one local folder, and logs the prompt next to it so nothing is ever lost.</strong></p>
+
+<h2>The key insight behind it</h2>
+<p>Jay's core observation is that Higgsfield isn't magic. It's a <em>wrapper</em>: a company that read the API documentation for models like Nano Banana, Kling, Veo, and GPT-Image, wired them together into one website, and charges $79/month for the convenience. Since Claude can read the same documentation and write the same connection code, you can build the wrapper yourself. The skill IS that wrapper — Jay literally copied the API code snippets and docs from the providers into the skill file. You then pay only per image or video generated (often just a few cents), instead of a monthly subscription, and everything stays on your own disk under terms you control.</p>
+
+<h2>What it's made of</h2>
+<p>Three parts, all local:</p>
+<ol>
+  <li><strong>The skill file itself</strong> — a markdown document Claude reads when you type <code>/generate</code>. It contains the rules, the routing logic, and the API knowledge (endpoints, parameters, code snippets copied from provider docs).</li>
+  <li><strong>Model "recipe" files</strong> in a <code>models/</code> folder — one per model, describing how to call it (which provider, endpoint, parameters, pricing).</li>
+  <li><strong>A local gallery dashboard</strong> — a small web page that reads one flat folder (<code>C:/ROBO/generations/</code>) and shows everything as a masonry grid, like Higgsfield's own gallery but on your machine. It also has saved "style" presets (click one, it copies the style prompt plus reference-image paths to reuse).</li>
+</ol>
+
+<h2>How a request flows through it</h2>
+<div class="box flow">Your request
+   ↓
+1. ROUTE MODEL
+   Pick the model: Nano Banana 2 Lite is the default for images,
+   Kling 3.0 the default for video; others only if named.
+   Pick the provider: cheapest first → kie.ai, then fal.ai,
+   then WaveSpeed. If one is down, fall through to the next.
+   Read that model's recipe file from models/.
+   Paid video ALWAYS gets a cost quote and waits for a "go".
+   ↓
+2. PREP REFERENCES
+   Load real logo / product / headshot files from generations/refs/.
+   Logos are never described in words — always passed as actual
+   image data. Files are uploaded to whichever host the chosen
+   provider can fetch from (Fal storage for Fal jobs, kie.ai
+   upload for the rest).
+   ↓
+3. GENERATE MEDIA
+   Claude writes a small Node script (never inline code), calls
+   the API exactly as the recipe says, polls if the job is async,
+   and saves the result flat into C:/ROBO/generations/ —
+   no subfolders, because the dashboard only reads the root.
+   ↓
+4. LOG + GALLERY
+   logGen() writes a sidecar JSON next to each file (same base
+   name) holding the prompt, model, references, and parameters.
+   The dashboard picks the new file up on next refresh, and a
+   /prompt-for command can later look up exactly how any image
+   was made.</div>
+
+<h2>The guardrails (the part that makes it safe)</h2>
+<p>Because Claude will happily generate 100 images and drain your credits if you let it, the skill bakes in hard money rules:</p>
+<ul>
+  <li><strong>A per-request budget</strong> — Jay's demo prompts said "total budget $3" and "$5", and the skill treats that as a hard ceiling.</li>
+  <li><strong>Cheapest provider first</strong> — the routing order (kie → fal → WaveSpeed) exists purely to minimize cost. For example, GPT-Image-2 at 2K costs ~5¢ on kie.ai vs ~31–34¢ inside Higgsfield.</li>
+  <li><strong>Cost quotes before paid video</strong> — video is the expensive category, so the skill must state the price and get an explicit yes before running.</li>
+</ul>
+
+<h2>Why this beats Higgsfield (Jay's argument)</h2>
+<table>
+  <tr><th></th><th>Higgsfield</th><th>/generate skill</th></tr>
+  <tr><td>Pricing</td><td>$49–79/month whether you use it or not</td><td>Pay-as-you-go, cents per generation</td></tr>
+  <tr><td>Your content</td><td>Terms let them use it to run/improve their service; assets deleted ~30 days after you cancel</td><td>Every file and every prompt lives on your disk forever</td></tr>
+  <tr><td>Models</td><td>Whatever they've wrapped</td><td>Anything on kie/fal/WaveSpeed (~500 models); adding a new one = pasting its docs into the skill</td></tr>
+  <tr><td>Workflow</td><td>Generation is the end of the road</td><td>Generation feeds straight into the next task — Jay's demo turned one image into a full website (image → Kling video background → more matching photos → styled site) in one session</td></tr>
+</table>
+
+<h2>What I take from this for our build</h2>
+<p>The skill's real value isn't the API calls — those are boilerplate. It's four design decisions: <strong>(1)</strong> cheapest-provider routing with fallback, <strong>(2)</strong> hard budget rules and cost confirmation for anything expensive, <strong>(3)</strong> one flat output folder with a sidecar JSON per file so provenance is never lost, and <strong>(4)</strong> a dumb local gallery that just reads that folder — because you can't judge visual work in a terminal. Copy those four ideas and the rest is plumbing.</p>
+
+</body>
+</html>
